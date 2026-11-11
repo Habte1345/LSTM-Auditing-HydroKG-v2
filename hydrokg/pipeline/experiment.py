@@ -25,7 +25,6 @@ from hydrokg.data import camels
 from hydrokg.data.predictions import attach_series, load_predictions, mask_missing, missing_report, save_predictions
 from hydrokg.data.splits import describe_split, save_split, stratified_holdout, temporal_split
 from hydrokg.enhance.correction import apply_correction
-from hydrokg.enhance.feedback import require_training_period
 from hydrokg.enhance.finetune import counts_to_results, fine_tune
 from hydrokg.kg import store
 from hydrokg.kg.analogs import AnalogFinder, benchmark
@@ -103,9 +102,14 @@ class Experiment:
                              self.train_period, self.seed, self.device)
         with open(run_dir / "cfg.json") as fp:
             self.run_cfg = json.load(fp)
+        # paths in a reused run's cfg.json may point to another machine; use the run directory
         self.run_cfg["db_path"] = str(run_dir / "attributes.db")
         self.run_cfg["train_file"] = str(run_dir / "data" / "train" / "train_data.h5")
+        if not Path(self.run_cfg["db_path"]).exists():
+            from hydrokg.lstm.datautils import add_camels_attributes
+            add_camels_attributes(self.camels_root, db_path=self.run_cfg["db_path"])
         if not Path(self.run_cfg["train_file"]).exists():
+            # gitignored preprocessing artefact of a reused run: rebuild it with the run's settings
             from hydrokg.lstm.utils import create_h5_files
             Path(self.run_cfg["train_file"]).parent.mkdir(parents=True, exist_ok=True)
             create_h5_files(camels_root=self.camels_root, out_file=Path(self.run_cfg["train_file"]),
@@ -197,11 +201,11 @@ class Experiment:
             out["validity"].to_csv(self.out / "audits" / f"{label}_observation_validity.csv")
         return _pickle(path, out)
 
-    def _record_audit(self, label: str, result: dict, used: list, period_: tuple, basin_set: str) -> URIRef:
+    def _record_audit(self, label: str, result: dict, used: list, period_: tuple, basin_set: str) -> tuple:
         act = self.prov.activity(HK.AuditActivity, f"audit_{label}", used)
         store.add_audit_outcomes(self.kg, act, result["results"])
         store.add_violation_facts(self.kg, act, result["records"], self.cfg["kg"]["store_daily_violations"])
-        return self.prov.entity(HK.AuditReport, f"report_{label}", act, period_, basin_set)
+        return act, self.prov.entity(HK.AuditReport, f"report_{label}", act, period_, basin_set)
 
     # ------------------------------------------------------------------ main
     def run(self) -> None:
@@ -219,11 +223,13 @@ class Experiment:
         # training-period audit used for feedback: observations of training basins only
         fb_preds = {b: (df if b in self.train_basins else df.assign(qobs=np.nan)) for b, df in pred_train.items()}
         audit_train = self.audit(fb_preds, "baseline_train_feedback", feedback=True)
-        require_training_period(tr, tr, "feedback audit")
-        e_audit_train = self._record_audit("baseline_train_feedback", audit_train, [e_pt, self.e_obs_train, self.e_forcing], tr, "all")
+        a_audit_train, e_audit_train = self._record_audit(
+            "baseline_train_feedback", audit_train, [e_pt, self.e_obs_train, self.e_forcing], tr, "all")
         a_fb = self.prov.activity(HK.FeedbackActivity, "feedback_from_training_audit", [e_audit_train])
         e_fb = self.prov.entity(HK.FeedbackSignal, "feedback_signals", a_fb, tr)
-        initial_rates = pd.DataFrame({r.basin_id: r.rates() for r in audit_train["results"]}).T
+        # feedback is read from the knowledge graph, after its provenance check
+        initial_rates = store.feedback_rates(self.kg, a_audit_train, tr)
+        initial_rates.to_csv(self.out / "kg" / "feedback_rates_from_kg.csv", index_label="basin_id")
 
         pred_test = self.predict(self.checkpoint, self.run_cfg["db_path"], self.test_basins, "test", "baseline")
         a_p = self.prov.activity(HK.PredictionActivity, "predict_baseline_test", [self.e_ckpt, self.e_forcing, self.e_attrs])
@@ -243,9 +249,10 @@ class Experiment:
                                       [self.e_ckpt, e_fb, self.e_obs_train, self.e_forcing, self.e_attrs],
                                       seed=self.seed)
 
-            def record_online(epoch, counts, _arm=arm, _act=a_ft):
+            def record_online(epoch, counts, _arm=arm):
                 act = self.prov.activity(HK.AuditActivity, f"online_audit_{_arm}_epoch{epoch}", [self.e_obs_train])
                 store.add_audit_outcomes(self.kg, act, counts_to_results(counts))
+                return store.feedback_rates(self.kg, act, tr)
 
             if meta_path.exists():
                 with open(meta_path) as fp:

@@ -74,7 +74,6 @@ hk:R6_energy_shape a sh:NodeShape ; hk:checksRule hk:R6 ;
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
 
-hk:checksRule a rdf:Property .
 
 hk:R0_shape a sh:NodeShape ; hk:checksRule hk:R0 ;
     rdfs:comment "Negative flow: Q_sim >= 0." ;

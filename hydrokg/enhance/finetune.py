@@ -97,10 +97,13 @@ def fine_tune(cfg: dict, baseline_run_cfg: dict, checkpoint_path: str | Path, ba
               on_epoch_end=None) -> dict:
     """Fine-tune and return paths/metadata.
 
-    initial_rates : basin x rule rates from the TRAINING-period audit of the baseline
-        (all basins that need a profile row, including held-out basins for which only the
-        observation-free rules are filled).
-    on_epoch_end : optional callback(epoch, online_counts) used to record provenance/KG.
+    initial_rates : basin x rule rates of the TRAINING-period audit of the baseline, as read
+        from the knowledge graph (hydrokg.kg.store.feedback_rates); all basins that need a
+        profile row, including held-out basins for which only observation-free rules are filled.
+    on_epoch_end : callback(epoch, online_counts) -> rates. The experiment pipeline writes the
+        epoch's online detections to the knowledge graph as a provenance-tracked audit and
+        returns the rates read back from the graph; these rates drive the next epoch. Without
+        a callback (standalone use) the rates are computed from the counts directly.
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -162,10 +165,12 @@ def fine_tune(cfg: dict, baseline_run_cfg: dict, checkpoint_path: str | Path, ba
 
         counts = pd.concat(epoch_counts).groupby(level=0).sum()
         counts.to_csv(out_dir / f"online_counts_epoch{epoch}.csv", index_label="basin_id")
-        online_rates = rates_from_counts(counts)
-        history.append({"epoch": epoch, "mean_online_rate": float(online_rates.mean(axis=1).mean())})
-        if on_epoch_end is not None:
-            on_epoch_end(epoch, counts)
+        kg_rates = on_epoch_end(epoch, counts) if on_epoch_end is not None else None
+        online_rates = (kg_rates.reindex(columns=ONLINE_RULES) if kg_rates is not None
+                        else rates_from_counts(counts))
+        online_rates.to_csv(out_dir / f"online_rates_epoch{epoch}.csv", index_label="basin_id")
+        history.append({"epoch": epoch, "mean_online_rate": float(online_rates.mean(axis=1).mean()),
+                        "feedback_source": "knowledge_graph" if kg_rates is not None else "counts"})
 
         if profile and epoch < ft["epochs"]:
             refreshed = initial_rates.reindex(profile_basins).copy()

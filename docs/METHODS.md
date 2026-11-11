@@ -142,6 +142,17 @@ The graph is RDF and reuses SOSA/SSN, PROV-O and SKOS (`hydrokg/kg/resources/hyd
    catchments; it is benchmarked against attribute k-nearest neighbours and the class
    filter of v1 by the skill of donor-composite hydrographs over the training period.
 
+7. **Feedback from the graph.** Curriculum weights and the violation profile are read from
+   the graph: the training-period audit and every online audit of the fine-tuning loop are
+   recorded as `hk:AuditActivity` nodes with their `hk:RuleOutcome`s, and a SPARQL query
+   returns their rates only after a provenance query confirms that every discharge dataset
+   the audit used lies inside the training period (`hydrokg.kg.store.feedback_rates`).
+
+Semantics: schema axioms are RDFS/OWL; inference is rule-based (SPARQL CONSTRUCT) and
+validation is SHACL, both under the closed-world assumption. Properties that take classes as
+values (`hk:violationType`, `hk:notApplicableTo`) use OWL 2 punning, so the ontology targets
+RDFS plus rule reasoning rather than OWL DL reasoning.
+
 A vectorized engine implements the same definitions for use inside the training loop;
 `tests/test_kg.py` asserts identical counts, evaluable units, applicability and exclusive
 attribution.

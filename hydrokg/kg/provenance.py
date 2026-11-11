@@ -89,6 +89,28 @@ SELECT DISTINCT ?prediction ?observations ?ps ?pe ?os ?oe WHERE {
 }"""
 
 
+FEEDBACK_SOURCES_QUERY = """PREFIX hk: <https://w3id.org/hydrokg#> PREFIX prov: <http://www.w3.org/ns/prov#>
+SELECT ?obs ?os ?oe WHERE {
+  ?audit a hk:AuditActivity ; prov:used ?obs .
+  ?obs a hk:DischargeObservations ; hk:periodStart ?os ; hk:periodEnd ?oe .
+}"""
+
+
+def assert_feedback_is_leak_free(g: Graph, audit: URIRef, train_period: tuple) -> None:
+    """Raise unless `audit` is a recorded hk:AuditActivity whose discharge inputs all lie
+    inside the training period. Called before any feedback signal is read from the graph."""
+    if (audit, RDF.type, HK.AuditActivity) not in g:
+        raise RuntimeError(f"{audit} is not a recorded audit activity; feedback needs provenance.")
+    start, end = pd.Timestamp(train_period[0]).date(), pd.Timestamp(train_period[1]).date()
+    used = list(g.query(FEEDBACK_SOURCES_QUERY, initBindings={"audit": audit}))
+    if not used:
+        raise RuntimeError(f"{audit} records no discharge observations; cannot certify its feedback.")
+    for obs, os_, oe in used:
+        if os_.toPython() < start or oe.toPython() > end:
+            raise RuntimeError(f"Feedback audit {audit} used {obs} ({os_}..{oe}), outside the "
+                               f"training period {start}..{end}.")
+
+
 def leakage_report(g: Graph, basin_holdout: bool = False) -> pd.DataFrame:
     """Temporal leakage always; spatial leakage (held-out basins' discharge at any time)
     when `basin_holdout`."""

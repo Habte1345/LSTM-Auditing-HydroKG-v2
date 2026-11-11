@@ -73,6 +73,17 @@ SELECT ?b ?rid ?rate WHERE {
             .pivot(index="basin_id", columns="rule", values="rate").reindex(columns=RULE_IDS))
 
 
+def feedback_rates(g: Graph, audit: URIRef, train_period: tuple) -> pd.DataFrame:
+    """The ONLY source of training feedback (curriculum weights, violation profile).
+
+    1. Provenance check in the graph: every discharge dataset the audit activity used
+       must lie inside the training period (hydrokg.kg.provenance.assert_feedback_is_leak_free).
+    2. Rates of that audit, read from its hk:RuleOutcome nodes with SPARQL."""
+    from hydrokg.kg.provenance import assert_feedback_is_leak_free
+    assert_feedback_is_leak_free(g, audit, train_period)
+    return rates_from_kg(g, audit)
+
+
 def class_family_summary(g: Graph, audit: URIRef) -> pd.DataFrame:
     """Mean rate per basin and violation class / evidence family, by joining outcomes to the
     rule metadata asserted in the ontology."""

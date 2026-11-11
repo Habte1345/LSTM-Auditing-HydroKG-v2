@@ -57,5 +57,33 @@ def test_full_pipeline(synthetic, tmp_path, mode):
     if mode == "basin_holdout":
         prof = pd.read_csv(out / "arms" / "profile" / "violation_profile.csv", index_col=0)
         assert set(prof.columns) == {"violation_rate_R0", "violation_rate_R5", "violation_rate_R6"}
+    # training feedback came from the knowledge graph
+    import json
+    assert (out / "kg" / "feedback_rates_from_kg.csv").exists()
+    meta = json.loads((out / "arms" / "curriculum_profile" / "finetune.json").read_text())
+    assert all(h["feedback_source"] == "knowledge_graph" for h in meta["history"])
     # a resumed run reuses every finished step
     Experiment(cfg, seed=7).run()
+
+
+def test_reuse_existing_baseline_without_h5(synthetic, tmp_path):
+    """A reused baseline run whose train_data.h5 was not kept (gitignored) is rebuilt."""
+    import shutil
+    root, basin_file = synthetic
+    base = OVERRIDES + [f"paths.camels_root={root}", f"paths.basin_list={basin_file}",
+                        f"paths.output_dir={tmp_path / 'a'}", "experiment.arms=[control]",
+                        "experiment.corrections=[none]", "kg.engine=vectorized"]
+    first = Experiment(load_config(overrides=base), seed=3)
+    first.basins_and_split()
+    first.baseline()
+    run_dir = Path(first.run_cfg["db_path"]).parent
+    reused = tmp_path / "reused_run"
+    shutil.copytree(run_dir, reused)
+    shutil.rmtree(reused / "data")
+    cfg = load_config(overrides=base[:-4] + [f"paths.output_dir={tmp_path / 'b'}", "experiment.arms=[control]",
+                                             "experiment.corrections=[none]", "kg.engine=vectorized",
+                                             f"experiment.reuse_baseline_run_dir={reused}"])
+    exp = Experiment(cfg, seed=3)
+    exp.run()
+    assert (reused / "data" / "train" / "train_data.h5").exists()
+    assert (exp.out / "audits" / "control_test.csv").exists()

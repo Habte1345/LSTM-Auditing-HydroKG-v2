@@ -15,7 +15,13 @@
 models, audits and corrections) and SKOS (stratification concepts). Rules are individuals of
 hk:Rule; their executable form is a set of SPARQL derivations plus SHACL Core shapes
 (shapes.ttl.j2, derivations.rq). Violation classes form a subclass hierarchy so that class-level
-and family-level summaries are obtained by RDFS entailment rather than by hard-coded grouping.""" .
+and family-level summaries are obtained by RDFS entailment rather than by hard-coded grouping.
+
+Semantics. Schema axioms are RDFS/OWL; inference is rule-based (SPARQL CONSTRUCT) and
+validation is SHACL, both under the closed-world assumption (a missing fact counts as false,
+e.g. no fitted Fu parameter means the Budyko curve is not identifiable). hk:violationType,
+hk:notApplicableTo and hk:curveNotApplicableTo take classes as values (OWL 2 punning), so the
+ontology is intended for RDFS + rule reasoning rather than OWL DL reasoning.""" .
 
 # ---------------------------------------------------------------------------------------
 # Catchments and stratification concepts
@@ -152,6 +158,34 @@ hk:ofCatchment a owl:ObjectProperty ; rdfs:subPropertyOf sosa:hasFeatureOfIntere
 hk:qSim a owl:DatatypeProperty ; rdfs:range xsd:double ; rdfs:comment "Simulated discharge, mm/day." .
 hk:qObs a owl:DatatypeProperty ; rdfs:range xsd:double ; rdfs:comment "Observed discharge, mm/day." .
 hk:onDate a owl:DatatypeProperty ; rdfs:range xsd:date .
+
+# Quantities attached to evaluation units (inputs of, or derived for, the SHACL shapes)
+hk:lagDays a owl:DatatypeProperty ; rdfs:domain hk:PeakEvent ; rdfs:range xsd:integer ;
+    rdfs:comment "Day of the simulated maximum within the search window minus day of the observed peak." .
+hk:absLagDays a owl:DatatypeProperty ; rdfs:domain hk:PeakEvent ; rdfs:range xsd:integer ;
+    rdfs:comment "Derived (SPARQL): |hk:lagDays|. Constrained by the R4 shape." .
+hk:meanQSim a owl:DatatypeProperty ; rdfs:range xsd:double ;
+    rdfs:comment "Mean simulated discharge over a water-balance window, mm/day." .
+hk:meanP a owl:DatatypeProperty ; rdfs:range xsd:double ;
+    rdfs:comment "Mean precipitation over a water-balance window, mm/day." .
+hk:fuEvaporativeIndex a owl:DatatypeProperty ; rdfs:domain hk:BudykoWindow ; rdfs:range xsd:double ;
+    rdfs:comment "Fu-curve evaporative index F(AI; omega_b) for the window's dryness index." .
+hk:evaporativeIndex a owl:DatatypeProperty ; rdfs:domain hk:BudykoWindow ; rdfs:range xsd:double ;
+    rdfs:comment "Derived (SPARQL): 1 - meanQSim/meanP. Constrained by the R6 shapes." .
+hk:drynessIndex a owl:DatatypeProperty ; rdfs:domain hk:BudykoWindow ; rdfs:range xsd:double ;
+    rdfs:comment "Derived (SPARQL): petMean/meanP." .
+hk:absBudykoDeviation a owl:DatatypeProperty ; rdfs:domain hk:BudykoWindow ; rdfs:range xsd:double ;
+    rdfs:comment "Derived (SPARQL): |evaporativeIndex - fuEvaporativeIndex| where evaporativeIndex >= 0 and the curve applies." .
+hk:simObsRatio a owl:DatatypeProperty ; rdfs:domain hk:DailyRecord ; rdfs:range xsd:double ;
+    rdfs:comment "Derived (SPARQL) where qObs > lowFlowFloor: qSim/qObs. Constrained by the R1 shape." .
+hk:relativeError a owl:DatatypeProperty ; rdfs:domain hk:DailyRecord ; rdfs:range xsd:double ;
+    rdfs:comment "Derived (SPARQL) where qObs > lowFlowFloor: |qSim - qObs|/qObs. Constrained by the R3 shape." .
+hk:qSimReferenced a owl:DatatypeProperty ; rdfs:domain hk:DailyRecord ; rdfs:range xsd:double ;
+    rdfs:comment "Derived (SPARQL) where qObs > lowFlowFloor: copy of qSim. Constrained by the R2 shape." .
+hk:excludedFromCurve a owl:ObjectProperty ; rdfs:domain hk:Catchment ; rdfs:range hk:Rule ;
+    rdfs:comment "Inferred: the curve part of the rule is not applicable to the catchment." .
+hk:checksRule a owl:ObjectProperty ; rdfs:range hk:Rule ;
+    rdfs:comment "Links a SHACL node shape (shapes.ttl) to the rule whose constraint it states." .
 
 hk:RuleOutcome a owl:Class ; rdfs:subClassOf prov:Entity ;
     rdfs:comment "Aggregate result of one rule for one catchment in one audit: counts and rate." .

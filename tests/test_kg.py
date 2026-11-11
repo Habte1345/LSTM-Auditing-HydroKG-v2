@@ -120,3 +120,46 @@ def test_leakage_query_detects_v1_design_and_passes_v2():
     # spatial: training discharge covering held-out basins
     assert len(leakage_report(_pipeline_provenance("train", True, "all"), basin_holdout=True)) > 0
     assert len(leakage_report(_pipeline_provenance("train", True, "train"), basin_holdout=True)) == 0
+
+
+def test_ontology_declares_every_term_the_code_uses():
+    import glob
+    import re
+    from rdflib import Graph
+    from hydrokg.kg.rules_rdf import derivation_updates
+    from hydrokg.kg.validation import basin_validation_graph
+    onto = load_ontology(CFG)
+    declared = {s for s in onto.subjects() if str(s).startswith(str(HK))}
+    df, c = _random_basin(9)
+    kg = build_catchment_graph([c], CFG)
+    apply_kg_applicability({c.basin_id: c}, kg)
+    g, _ = basin_validation_graph(df, c, CFG, kg)
+    for update in derivation_updates():
+        g.update(update)
+    used = {p for G in (kg, g, ShapesGraph(CFG).graph) for _, p, _ in G if str(p).startswith(str(HK))}
+    source = " ".join(open(f).read() for f in glob.glob("hydrokg/**/*.py", recursive=True))
+    names = set(re.findall(r"HK\.([A-Za-z]+)", source)) | set(re.findall(r"hk:([A-Za-z][A-Za-z]+)", source))
+    used |= {HK[n] for n in names}
+    missing = sorted(str(t).split("#")[1] for t in used - declared)
+    assert missing == [], f"terms used but not declared in hydrokg.ttl: {missing}"
+
+
+def test_feedback_is_read_from_kg_only_with_training_provenance():
+    df, c = _random_basin(8)
+    kg = build_catchment_graph([c], CFG)
+    apply_kg_applicability({c.basin_id: c}, kg)
+    res = audit_basin(df, c, CFG)
+    prov = Provenance(kg, "https://w3id.org/hydrokg/run/feedback")
+    train, test = ("1980-10-01", "1995-09-30"), ("1995-10-01", "2010-09-30")
+    q_train = prov.dataset(HK.DischargeObservations, "q_train", train)
+    q_test = prov.dataset(HK.DischargeObservations, "q_test", test)
+    good = prov.activity(HK.AuditActivity, "audit_train", [q_train])
+    bad = prov.activity(HK.AuditActivity, "audit_test", [q_test])
+    for act in (good, bad):
+        store.add_audit_outcomes(kg, act, [res])
+    rates = store.feedback_rates(kg, good, train)
+    assert rates.loc[c.basin_id, "R0"] == pytest.approx(res.rate("R0"))
+    with pytest.raises(RuntimeError):
+        store.feedback_rates(kg, bad, train)                       # audit used test-period discharge
+    with pytest.raises(RuntimeError):
+        store.feedback_rates(kg, URIRef("https://example.org/not_recorded"), train)
