@@ -103,8 +103,14 @@ class Experiment:
                              self.train_period, self.seed, self.device)
         with open(run_dir / "cfg.json") as fp:
             self.run_cfg = json.load(fp)
-        self.run_cfg.setdefault("db_path", str(run_dir / "attributes.db"))
-        self.run_cfg.setdefault("train_file", str(run_dir / "data" / "train" / "train_data.h5"))
+        self.run_cfg["db_path"] = str(run_dir / "attributes.db")
+        self.run_cfg["train_file"] = str(run_dir / "data" / "train" / "train_data.h5")
+        if not Path(self.run_cfg["train_file"]).exists():
+            from hydrokg.lstm.utils import create_h5_files
+            Path(self.run_cfg["train_file"]).parent.mkdir(parents=True, exist_ok=True)
+            create_h5_files(camels_root=self.camels_root, out_file=Path(self.run_cfg["train_file"]),
+                            basins=self.train_basins, dates=[self.train_period[0], self.train_period[1]],
+                            with_basin_str=True, seq_length=self.cfg["lstm"]["seq_length"])
         self.checkpoint = ckpt
         return self.run_cfg
 
