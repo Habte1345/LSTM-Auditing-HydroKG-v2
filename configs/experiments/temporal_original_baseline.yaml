@@ -1,0 +1,11 @@
+# Same as temporal.yaml but reusing the original 5-epoch baseline run
+# (HydroAuditToolFrameowrk/runs/run_0305_2015_seed658666). Set the path on the command line:
+#   --set experiment.reuse_baseline_run_dir=/path/to/run_0305_2015_seed658666
+experiment:
+  name: hydrokg_v2_original_baseline
+  audit_workers: 8
+split:
+  mode: temporal
+lstm:
+  epochs: 5
+seeds: [658666]

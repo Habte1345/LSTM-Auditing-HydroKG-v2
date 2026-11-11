@@ -1,0 +1,173 @@
+# =============================================================================
+# HydroKG-Audit default configuration
+# Every threshold, period and switch used anywhere in the code is defined here.
+# Experiment configs (configs/experiments/*.yaml) override individual keys.
+# =============================================================================
+
+paths:
+  camels_root: null            # CAMELS-US root (basin_mean_forcing/, usgs_streamflow/, camels_attributes_v2.0/)
+  basin_list: configs/basin_list_670.txt
+  output_dir: results          # every run writes into <output_dir>/<experiment>/<seed>/
+
+# -----------------------------------------------------------------------------
+# Periods (water years). Observations from `test` are used ONLY for scoring.
+# -----------------------------------------------------------------------------
+periods:
+  train: ["1980-10-01", "1995-09-30"]
+  test:  ["1995-10-01", "2010-09-30"]
+
+# -----------------------------------------------------------------------------
+# Basin split.
+#   temporal       : all basins in training and testing; only time is held out
+#   basin_holdout  : aridity-stratified hold-out of `holdout_fraction` of basins
+# -----------------------------------------------------------------------------
+split:
+  mode: temporal
+  holdout_fraction: 0.2
+  stratify_by: aridity_class
+  seed: 20260101
+
+# -----------------------------------------------------------------------------
+# Baseline LSTM: GLOBAL_SETTINGS of HydroAuditToolFrameowrk (Kratzert et al. code).
+# `epochs: 5` reproduces the original run; Kratzert et al. (2019) use 30 epochs with
+# the learning-rate drops at epochs 11 and 21 (see configs/experiments/baseline_converged.yaml).
+# -----------------------------------------------------------------------------
+lstm:
+  batch_size: 512
+  clip_norm: true
+  clip_value: 1
+  dropout: 0.2
+  epochs: 5
+  hidden_size: 128
+  initial_forget_gate_bias: 5
+  learning_rate: 0.005
+  lr_schedule: {11: 0.0005, 21: 0.0001}
+  seq_length: 180
+  concat_static: true
+  no_static: false
+  use_mse: false
+  cache_data: true
+  num_workers: 0
+  device: cpu
+
+# -----------------------------------------------------------------------------
+# Basin stratification. CAMELS `aridity` is the dryness index PET/P (Priestley-Taylor
+# PET); 1.0 separates energy-limited from water-limited basins (Budyko).
+# -----------------------------------------------------------------------------
+stratification:
+  aridity_bins: [0.5, 1.0, 2.0]
+  aridity_labels: [humid, sub_humid, semi_arid, arid]
+  snow_dominated_fraction: 0.3        # CAMELS frac_snow
+  intermittent_zero_fraction: 0.05    # training-period share of days with Q_obs <= zero_flow
+  zero_flow: 0.001                    # mm/day
+  landcover_groups:                   # IGBP dom_land_cover -> six groups (Abeshu & Li, 2021)
+    "Croplands": CL/NVM
+    "Cropland/Natural Vegetation Mosaic": CL/NVM
+    "cropland/natural vegetation mosaic": CL/NVM
+    "Deciduous Broadleaf Forest": DBF
+    "Evergreen Needleleaf Forest": EF
+    "Evergreen Broadleaf Forest": EF
+    "Mixed Forests": MF
+    "Grasslands": GL
+    "Savannas": WS+SL
+    "Woody Savannas": WS+SL
+    "Closed Shrublands": WS+SL
+    "Open Shrublands": WS+SL
+
+# -----------------------------------------------------------------------------
+# Observation quality control. CAMELS codes missing discharge as -999 cfs, which the
+# unit conversion turns into large negative mm/day values; they are set to NaN.
+# -----------------------------------------------------------------------------
+qc:
+  qobs_missing_below: 0.0
+
+# -----------------------------------------------------------------------------
+# Auditing rules. Basin-specific quantities (low-flow floor, event height, Fu omega,
+# applicability) are derived from TRAINING-period data only (hydrokg.rules.context).
+# -----------------------------------------------------------------------------
+rules:
+  low_flow_floor:              # q_floor_b = max(absolute, fraction * mean_train(Q_obs))
+    absolute: 0.01             # mm/day
+    fraction_of_mean: 0.05
+  R1: {low_ratio: 0.2, high_ratio: 5.0}
+  R2: {sim_zero: 0.01}                     # mm/day
+  R3: {max_relative_error: 1.0}
+  R4:
+    event_quantile: 0.90                   # observed peak height >= this training-period quantile
+    min_separation_days: 30
+    search_window_days: 10
+    max_lag_days: 2
+  R5:
+    min_days_per_window: 330
+    undercatch_runoff_ratio: 1.0           # R5 not applicable if training-period Q_obs/P >= this
+  R6:
+    window_years: 5
+    step_years: 1
+    min_days_per_window: 1650
+    max_budyko_deviation: 0.15             # |EI_sim - Fu(AI; omega_b)|
+    omega_bounds: [1.0001, 20.0]
+    energy_limit: true                     # EI_sim <= AI  (ET_sim <= PET)
+
+# Daily-rule precedence used for exclusive (root-cause) attribution of a day.
+attribution_precedence: [R0, R2, R1, R3]
+
+# -----------------------------------------------------------------------------
+# Violation-burden index. Per-rule rates are always reported; the scalar index uses
+# explicit weights:  equal_rules | equal_classes | custom
+# -----------------------------------------------------------------------------
+burden:
+  weighting: equal_classes
+  custom_weights: {R0: 1, R1: 1, R2: 1, R3: 1, R4: 1, R5: 1, R6: 1}
+
+# -----------------------------------------------------------------------------
+# Graph-guided fine-tuning (warm start from the baseline checkpoint).
+# -----------------------------------------------------------------------------
+fine_tune:
+  epochs: 3
+  learning_rate: 0.0005
+  curriculum:
+    enabled: true
+    temperature: 1.0
+    floor: 0.1                 # minimum weight relative to the largest basin weight
+  profile_feature:
+    enabled: true
+    rules: auto                # auto | all | observation_free  (auto -> observation_free for basin_holdout)
+
+# -----------------------------------------------------------------------------
+# Post-hoc correction of test-period predictions. Only observation-free rules may
+# trigger a correction (no test-period Q_obs is ever read here).
+# -----------------------------------------------------------------------------
+correction:
+  method: none                 # none | clip | analog
+  daily_rules: [R0]
+  r5_projection: false         # rescale a violating water year onto the Q_sim <= P bound
+
+# -----------------------------------------------------------------------------
+# Analog retrieval: graph_ppr | table_knn | class_filter
+# -----------------------------------------------------------------------------
+analogs:
+  method: graph_ppr
+  k: 5
+  ppr_alpha: 0.85
+
+# -----------------------------------------------------------------------------
+# Knowledge graph
+# -----------------------------------------------------------------------------
+kg:
+  engine: shacl                # shacl (RDF + SPARQL derivations + SHACL Core shapes) | vectorized
+  store_daily_violations: false   # true writes every daily violation node (large)
+  base_iri: "https://w3id.org/hydrokg#"
+
+seeds: [658666, 111, 222]
+
+# -----------------------------------------------------------------------------
+# Experiment orchestration (hydrokg.pipeline.experiment)
+# -----------------------------------------------------------------------------
+experiment:
+  name: hydrokg_v2
+  arms: [control, curriculum, profile, curriculum_profile]
+  corrections: [none, clip, analog]
+  baseline_checkpoint_epoch: null    # null -> last epoch (lstm.epochs)
+  reuse_baseline_run_dir: null       # path of an existing baseline run (cfg.json, attributes.db, model_epoch*.pt, data/train/train_data.h5)
+  audit_workers: 1                   # parallel processes for basin audits
+  kge_bins: [-1.0, 0.0, 0.2, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]

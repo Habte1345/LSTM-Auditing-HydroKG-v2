@@ -1,0 +1,29 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "HydroKG-Audit: auditing and improving LSTM streamflow predictions with a hydrologic knowledge graph"
+version: 2.0.0
+date-released: 2026-11-11
+license: MIT
+authors:
+  - family-names: Tamiru
+    given-names: Habtamu
+    affiliation: "Department of Civil, Construction and Environmental Engineering, The University of Alabama"
+  - family-names: Wood
+    given-names: AJ
+  - family-names: Akinade
+    given-names: Basit
+  - family-names: Gong
+    given-names: Jiaqi
+  - family-names: Li
+    given-names: Shenglin
+  - family-names: Guo
+    given-names: Xiaoming
+  - family-names: Loof
+    given-names: Travis
+  - family-names: Holcomb
+    given-names: Hannah
+  - family-names: Davies
+    given-names: Abby
+  - family-names: Burian
+    given-names: Steven J.
+    affiliation: "Alabama Water Institute, The University of Alabama"

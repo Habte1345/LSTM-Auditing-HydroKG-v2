@@ -1,0 +1,4 @@
+# Re-audit the v1 prediction files with the revised rules (no training).
+experiment:
+  name: reaudit_v1
+  audit_workers: 8

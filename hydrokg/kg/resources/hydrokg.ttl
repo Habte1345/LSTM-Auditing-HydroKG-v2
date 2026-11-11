@@ -1,0 +1,192 @@
+@prefix hk:   <https://w3id.org/hydrokg#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+@prefix sosa: <http://www.w3.org/ns/sosa/> .
+@prefix prov: <http://www.w3.org/ns/prov#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+
+<https://w3id.org/hydrokg> a owl:Ontology ;
+    dcterms:title "HydroKG ontology: auditing streamflow predictions against hydrologic rules" ;
+    owl:versionInfo "2.0.0" ;
+    rdfs:comment """Reuses SOSA/SSN (observations and predictions), PROV-O (provenance of data,
+models, audits and corrections) and SKOS (stratification concepts). Rules are individuals of
+hk:Rule; their executable form is a set of SPARQL derivations plus SHACL Core shapes
+(shapes.ttl.j2, derivations.rq). Violation classes form a subclass hierarchy so that class-level
+and family-level summaries are obtained by RDFS entailment rather than by hard-coded grouping.""" .
+
+# ---------------------------------------------------------------------------------------
+# Catchments and stratification concepts
+# ---------------------------------------------------------------------------------------
+hk:Catchment a owl:Class ; rdfs:subClassOf sosa:FeatureOfInterest ;
+    rdfs:label "Catchment" .
+hk:SnowDominatedCatchment a owl:Class ; rdfs:subClassOf hk:Catchment ;
+    rdfs:comment "Fraction of precipitation falling as snow >= stratification.snow_dominated_fraction." .
+hk:IntermittentCatchment a owl:Class ; rdfs:subClassOf hk:Catchment ;
+    rdfs:comment "Training-period share of zero-flow days >= stratification.intermittent_zero_fraction." .
+hk:UndercatchCatchment a owl:Class ; rdfs:subClassOf hk:Catchment ;
+    rdfs:comment "Training-period observed runoff ratio >= rules.R5.undercatch_runoff_ratio: the precipitation forcing cannot close the water balance, so the water-limit rule is not applicable." .
+hk:NonIdentifiableBudykoCatchment a owl:Class ; rdfs:subClassOf hk:Catchment ;
+    rdfs:comment "Observed evaporative index outside the range of the Fu curve; the curve part of R6 is not applicable." .
+
+hk:StratificationConcept a owl:Class ; rdfs:subClassOf skos:Concept .
+hk:AridityClass a owl:Class ; rdfs:subClassOf hk:StratificationConcept .
+hk:LandCoverClass a owl:Class ; rdfs:subClassOf hk:StratificationConcept .
+hk:HydrologicRegion a owl:Class ; rdfs:subClassOf hk:StratificationConcept .
+hk:AttributeLevel a owl:Class ; rdfs:subClassOf hk:StratificationConcept ;
+    rdfs:comment "Quantile bin of a continuous catchment attribute (used for graph-based analog retrieval)." .
+
+hk:hasAridityClass a owl:ObjectProperty ; rdfs:domain hk:Catchment ; rdfs:range hk:AridityClass ; rdfs:subPropertyOf hk:hasConcept .
+hk:hasLandCoverClass a owl:ObjectProperty ; rdfs:domain hk:Catchment ; rdfs:range hk:LandCoverClass ; rdfs:subPropertyOf hk:hasConcept .
+hk:inRegion a owl:ObjectProperty ; rdfs:domain hk:Catchment ; rdfs:range hk:HydrologicRegion ; rdfs:subPropertyOf hk:hasConcept .
+hk:hasAttributeLevel a owl:ObjectProperty ; rdfs:domain hk:Catchment ; rdfs:range hk:AttributeLevel ; rdfs:subPropertyOf hk:hasConcept .
+hk:hasConcept a owl:ObjectProperty ; rdfs:domain hk:Catchment ; rdfs:range hk:StratificationConcept .
+
+hk:basinId a owl:DatatypeProperty ; rdfs:domain hk:Catchment ; rdfs:range xsd:string .
+hk:aridityIndex a owl:DatatypeProperty ; rdfs:domain hk:Catchment ; rdfs:range xsd:double ; rdfs:comment "PET/P (CAMELS `aridity`)." .
+hk:snowFraction a owl:DatatypeProperty ; rdfs:domain hk:Catchment ; rdfs:range xsd:double .
+hk:petMean a owl:DatatypeProperty ; rdfs:domain hk:Catchment ; rdfs:range xsd:double ; rdfs:comment "mm/day" .
+hk:lowFlowFloor a owl:DatatypeProperty ; rdfs:domain hk:Catchment ; rdfs:range xsd:double ; rdfs:comment "mm/day, from training-period observations." .
+hk:eventHeight a owl:DatatypeProperty ; rdfs:domain hk:Catchment ; rdfs:range xsd:double .
+hk:runoffRatioTrain a owl:DatatypeProperty ; rdfs:domain hk:Catchment ; rdfs:range xsd:double .
+hk:zeroFlowFractionTrain a owl:DatatypeProperty ; rdfs:domain hk:Catchment ; rdfs:range xsd:double .
+hk:fuOmega a owl:DatatypeProperty ; rdfs:domain hk:Catchment ; rdfs:range xsd:double .
+
+# ---------------------------------------------------------------------------------------
+# Rules, violation classes, evidence families
+# ---------------------------------------------------------------------------------------
+hk:Rule a owl:Class ; rdfs:label "Auditing rule" .
+hk:ViolationClassConcept a owl:Class .
+hk:EvidenceFamily a owl:Class .
+hk:ruleId a owl:DatatypeProperty ; rdfs:domain hk:Rule ; rdfs:range xsd:string .
+hk:temporalScale a owl:DatatypeProperty ; rdfs:domain hk:Rule ; rdfs:range xsd:string .
+hk:evaluableOnline a owl:DatatypeProperty ; rdfs:domain hk:Rule ; rdfs:range xsd:boolean .
+hk:rootCausePriority a owl:DatatypeProperty ; rdfs:domain hk:Rule ; rdfs:range xsd:integer ;
+    rdfs:comment "Lower value = more fundamental. A daily violation is explained by a same-day violation of a rule with lower priority." .
+hk:inViolationClass a owl:ObjectProperty ; rdfs:domain hk:Rule ; rdfs:range hk:ViolationClassConcept .
+hk:inEvidenceFamily a owl:ObjectProperty ; rdfs:domain hk:Rule ; rdfs:range hk:EvidenceFamily .
+hk:violationType a owl:ObjectProperty ; rdfs:domain hk:Rule ; rdfs:range owl:Class ;
+    rdfs:comment "The violation class instantiated when this rule fails." .
+hk:notApplicableTo a owl:ObjectProperty ; rdfs:domain hk:Rule ; rdfs:range owl:Class ;
+    rdfs:comment "Catchment class for which the rule is not evaluated." .
+hk:curveNotApplicableTo a owl:ObjectProperty ; rdfs:domain hk:Rule ; rdfs:range owl:Class .
+hk:excludedFromRule a owl:ObjectProperty ; rdfs:domain hk:Catchment ; rdfs:range hk:Rule ;
+    rdfs:comment "Inferred: the catchment belongs to a class the rule is not applicable to." .
+
+hk:PhysicalImpossibility a hk:ViolationClassConcept ; rdfs:label "Physical impossibility" .
+hk:MagnitudeFailure a hk:ViolationClassConcept ; rdfs:label "Magnitude failure" .
+hk:TimingFailure a hk:ViolationClassConcept ; rdfs:label "Timing failure" .
+hk:BudgetFailure a hk:ViolationClassConcept ; rdfs:label "Budget failure" .
+hk:ObservationFree a hk:EvidenceFamily ; rdfs:label "Observation-free (physical consistency)" ;
+    rdfs:comment "Evaluated from simulated discharge, forcing and static attributes; no observed discharge of the audited period is read." .
+hk:ObservationReferenced a hk:EvidenceFamily ; rdfs:label "Observation-referenced (prediction error)" ;
+    rdfs:comment "Compares simulated with observed discharge of the audited period." .
+
+# Violation hierarchy (RDFS entailment gives class- and family-level membership)
+hk:Violation a owl:Class ; rdfs:subClassOf prov:Entity .
+hk:PhysicalImpossibilityViolation a owl:Class ; rdfs:subClassOf hk:Violation .
+hk:MagnitudeFailureViolation a owl:Class ; rdfs:subClassOf hk:Violation .
+hk:TimingFailureViolation a owl:Class ; rdfs:subClassOf hk:Violation .
+hk:BudgetFailureViolation a owl:Class ; rdfs:subClassOf hk:Violation .
+hk:ObservationFreeViolation a owl:Class ; rdfs:subClassOf hk:Violation .
+hk:ObservationReferencedViolation a owl:Class ; rdfs:subClassOf hk:Violation .
+
+hk:NegativeFlowViolation a owl:Class ;
+    rdfs:subClassOf hk:PhysicalImpossibilityViolation , hk:ObservationFreeViolation .
+hk:ExtremeRatioViolation a owl:Class ;
+    rdfs:subClassOf hk:MagnitudeFailureViolation , hk:ObservationReferencedViolation .
+hk:ZeroFlowCollapseViolation a owl:Class ;
+    rdfs:subClassOf hk:MagnitudeFailureViolation , hk:ObservationReferencedViolation .
+hk:HighRelativeErrorViolation a owl:Class ;
+    rdfs:subClassOf hk:MagnitudeFailureViolation , hk:ObservationReferencedViolation .
+hk:PeakTimingViolation a owl:Class ;
+    rdfs:subClassOf hk:TimingFailureViolation , hk:ObservationReferencedViolation .
+hk:WaterLimitViolation a owl:Class ;
+    rdfs:subClassOf hk:BudgetFailureViolation , hk:ObservationFreeViolation .
+hk:BudykoViolation a owl:Class ;
+    rdfs:subClassOf hk:BudgetFailureViolation , hk:ObservationFreeViolation .
+
+hk:R0 a hk:Rule ; hk:ruleId "R0" ; rdfs:label "Negative flow" ; hk:temporalScale "daily" ;
+    hk:evaluableOnline true ; hk:rootCausePriority 0 ;
+    hk:inViolationClass hk:PhysicalImpossibility ; hk:inEvidenceFamily hk:ObservationFree ;
+    hk:violationType hk:NegativeFlowViolation .
+hk:R1 a hk:Rule ; hk:ruleId "R1" ; rdfs:label "Extreme ratio" ; hk:temporalScale "daily" ;
+    hk:evaluableOnline true ; hk:rootCausePriority 2 ;
+    hk:inViolationClass hk:MagnitudeFailure ; hk:inEvidenceFamily hk:ObservationReferenced ;
+    hk:violationType hk:ExtremeRatioViolation .
+hk:R2 a hk:Rule ; hk:ruleId "R2" ; rdfs:label "Zero-flow collapse" ; hk:temporalScale "daily" ;
+    hk:evaluableOnline true ; hk:rootCausePriority 1 ;
+    hk:inViolationClass hk:MagnitudeFailure ; hk:inEvidenceFamily hk:ObservationReferenced ;
+    hk:violationType hk:ZeroFlowCollapseViolation .
+hk:R3 a hk:Rule ; hk:ruleId "R3" ; rdfs:label "High relative error" ; hk:temporalScale "daily" ;
+    hk:evaluableOnline true ; hk:rootCausePriority 3 ;
+    hk:inViolationClass hk:MagnitudeFailure ; hk:inEvidenceFamily hk:ObservationReferenced ;
+    hk:violationType hk:HighRelativeErrorViolation .
+hk:R4 a hk:Rule ; hk:ruleId "R4" ; rdfs:label "Peak-timing error" ; hk:temporalScale "event" ;
+    hk:evaluableOnline false ;
+    hk:inViolationClass hk:TimingFailure ; hk:inEvidenceFamily hk:ObservationReferenced ;
+    hk:violationType hk:PeakTimingViolation .
+hk:R5 a hk:Rule ; hk:ruleId "R5" ; rdfs:label "Water limit (mass balance)" ; hk:temporalScale "window" ;
+    hk:evaluableOnline false ;
+    hk:inViolationClass hk:BudgetFailure ; hk:inEvidenceFamily hk:ObservationFree ;
+    hk:violationType hk:WaterLimitViolation ;
+    hk:notApplicableTo hk:UndercatchCatchment .
+hk:R6 a hk:Rule ; hk:ruleId "R6" ; rdfs:label "Budyko consistency" ; hk:temporalScale "window" ;
+    hk:evaluableOnline false ;
+    hk:inViolationClass hk:BudgetFailure ; hk:inEvidenceFamily hk:ObservationFree ;
+    hk:violationType hk:BudykoViolation ;
+    hk:curveNotApplicableTo hk:NonIdentifiableBudykoCatchment .
+
+# ---------------------------------------------------------------------------------------
+# Evaluation units (SOSA) and violation facts
+# ---------------------------------------------------------------------------------------
+hk:EvaluationUnit a owl:Class ; rdfs:subClassOf sosa:Observation ;
+    rdfs:comment "A unit at which a rule is evaluated: a day, an observed peak event or a water-balance window." .
+hk:DailyRecord a owl:Class ; rdfs:subClassOf hk:EvaluationUnit .
+hk:PeakEvent a owl:Class ; rdfs:subClassOf hk:EvaluationUnit .
+hk:WaterYearWindow a owl:Class ; rdfs:subClassOf hk:EvaluationUnit .
+hk:BudykoWindow a owl:Class ; rdfs:subClassOf hk:EvaluationUnit .
+hk:ofCatchment a owl:ObjectProperty ; rdfs:subPropertyOf sosa:hasFeatureOfInterest ; rdfs:range hk:Catchment .
+hk:qSim a owl:DatatypeProperty ; rdfs:range xsd:double ; rdfs:comment "Simulated discharge, mm/day." .
+hk:qObs a owl:DatatypeProperty ; rdfs:range xsd:double ; rdfs:comment "Observed discharge, mm/day." .
+hk:onDate a owl:DatatypeProperty ; rdfs:range xsd:date .
+
+hk:RuleOutcome a owl:Class ; rdfs:subClassOf prov:Entity ;
+    rdfs:comment "Aggregate result of one rule for one catchment in one audit: counts and rate." .
+hk:forCatchment a owl:ObjectProperty ; rdfs:range hk:Catchment .
+hk:forRule a owl:ObjectProperty ; rdfs:range hk:Rule .
+hk:nViolations a owl:DatatypeProperty ; rdfs:range xsd:integer .
+hk:nEvaluable a owl:DatatypeProperty ; rdfs:range xsd:integer .
+hk:rate a owl:DatatypeProperty ; rdfs:range xsd:double .
+hk:violatesRule a owl:ObjectProperty ; rdfs:domain hk:Violation ; rdfs:range hk:Rule .
+hk:violates a owl:ObjectProperty ; rdfs:domain hk:EvaluationUnit ; rdfs:range hk:Rule ;
+    rdfs:comment "The evaluation unit (day, event or window) fails the rule's SHACL shape." .
+hk:explainedRule a owl:ObjectProperty ; rdfs:domain hk:DailyRecord ; rdfs:range hk:Rule ;
+    rdfs:comment "Inferred: the day's violation of this rule is explained by a violation, on the same day, of a rule with lower hk:rootCausePriority (e.g. a negative Q_sim also trips R1 and R3)." .
+
+# ---------------------------------------------------------------------------------------
+# Provenance (PROV-O specializations)
+# ---------------------------------------------------------------------------------------
+hk:DischargeObservations a owl:Class ; rdfs:subClassOf prov:Entity .
+hk:ForcingData a owl:Class ; rdfs:subClassOf prov:Entity .
+hk:StaticAttributes a owl:Class ; rdfs:subClassOf prov:Entity .
+hk:ModelCheckpoint a owl:Class ; rdfs:subClassOf prov:Entity .
+hk:PredictionSet a owl:Class ; rdfs:subClassOf prov:Entity .
+hk:EvaluatedPredictionSet a owl:Class ; rdfs:subClassOf hk:PredictionSet ;
+    rdfs:comment "Predictions whose skill and violations are reported in the paper." .
+hk:AuditReport a owl:Class ; rdfs:subClassOf prov:Entity .
+hk:FeedbackSignal a owl:Class ; rdfs:subClassOf prov:Entity ;
+    rdfs:comment "Curriculum weights or violation-profile feature derived from an audit." .
+hk:TrainingActivity a owl:Class ; rdfs:subClassOf prov:Activity .
+hk:FineTuningActivity a owl:Class ; rdfs:subClassOf hk:TrainingActivity .
+hk:PredictionActivity a owl:Class ; rdfs:subClassOf prov:Activity .
+hk:AuditActivity a owl:Class ; rdfs:subClassOf prov:Activity .
+hk:FeedbackActivity a owl:Class ; rdfs:subClassOf prov:Activity .
+hk:CorrectionActivity a owl:Class ; rdfs:subClassOf prov:Activity .
+hk:periodStart a owl:DatatypeProperty ; rdfs:range xsd:date .
+hk:periodEnd a owl:DatatypeProperty ; rdfs:range xsd:date .
+hk:seed a owl:DatatypeProperty ; rdfs:range xsd:integer .
+hk:configHash a owl:DatatypeProperty ; rdfs:range xsd:string .
+hk:basinSet a owl:DatatypeProperty ; rdfs:range xsd:string ; rdfs:comment "train | test | all" .

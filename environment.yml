@@ -1,0 +1,20 @@
+name: hydrokg
+channels: [conda-forge]
+dependencies:
+  - python=3.11
+  - numpy
+  - pandas
+  - scipy
+  - scikit-learn
+  - h5py
+  - numba
+  - tqdm
+  - pyyaml
+  - networkx
+  - pytest
+  - pip
+  - pip:
+      - torch
+      - rdflib>=7.0
+      - pyshacl>=0.25
+      - -e .

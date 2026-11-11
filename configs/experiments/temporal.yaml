@@ -1,0 +1,9 @@
+# Main experiment: all 670 basins, train 1980-1995, test 1995-2010.
+# Baseline trained to convergence with the learning-rate schedule of Kratzert et al. (2019).
+experiment:
+  name: hydrokg_v2
+  audit_workers: 8
+split:
+  mode: temporal
+lstm:
+  epochs: 30
