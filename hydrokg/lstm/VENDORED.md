@@ -13,7 +13,7 @@ Kratzert et al. (2018, HESS, doi:10.5194/hess-22-6005-2018). Licensed under Apac
 | `nseloss.py` | `Scripts/nseloss.py` | `03032940…` | kept `NSELoss` unchanged; removed the unused `HydroKGRealTimeLoss` class (a rule-penalty loss that this study does not use) |
 | `utils.py` | `Scripts/utils.py` | `1689605d…` | relative import of `CamelsTXT`; `get_basin_list` takes the basin file as an argument and skips blank lines |
 | `model.py` | `src/main.py` (`Model`) | `5ee13611…` | none to the class |
-| `train.py` | `src/main.py` (`train`, `train_epoch`, `evaluate`, `evaluate_basin`) | `5ee13611…` | settings passed as a dictionary; explicit basin list, run directory, seed and device; evaluation period and checkpoint are arguments instead of the fixed validation period and `model_epoch5.pt`; the input size is computed from the attribute table instead of the literal 32 (identical for the baseline: 5 forcings + 27 attributes); the prediction index is cut to the number of predictions |
+| `train.py` | `src/main.py` (`train`, `train_epoch`, `evaluate`, `evaluate_basin`) | `5ee13611…` | settings passed as a dictionary; explicit basin list, run directory, seed and device; evaluation period and checkpoint are arguments instead of the fixed validation period and `model_epoch5.pt`; the input size is computed from the attribute table instead of the literal 32 (identical for the baseline: 5 forcings + 27 attributes); the prediction index is cut to the number of predictions; optimizer and random-number-generator states are saved with each epoch and training resumes after the last complete epoch |
 
 Numerical behaviour is unchanged: identical data pipeline (NLDAS-extended forcing, global
 SCALER normalization, 27 static attributes concatenated at every time step), model,

@@ -13,7 +13,9 @@ procedure (data pipeline, model, NSE loss, Adam, gradient-norm clipping, learnin
 schedule, many-to-one inference, output rescaling) is unchanged. Changes are limited to
 how settings are supplied (configuration dictionary instead of module globals and
 command-line flags), an explicit basin list and run directory, a configurable evaluation
-period and checkpoint, and an explicit `device` argument. See hydrokg/lstm/VENDORED.md.
+period and checkpoint, an explicit `device` argument, and saving the optimizer and random
+number generator states with every epoch so that an interrupted training resumes at the next
+epoch. See hydrokg/lstm/VENDORED.md.
 """
 import json
 import random
@@ -164,7 +166,17 @@ def train(lstm_cfg: Dict, camels_root: Path, basins: List, run_dir: Path,
     # reduce learning rates after each 10 epochs
     learning_rates = {int(k): v for k, v in lstm_cfg["lr_schedule"].items()}
 
-    for epoch in range(1, lstm_cfg["epochs"] + 1):
+    # resume from the last epoch whose model, optimizer and RNG states were all saved
+    start_epoch = 1
+    last = last_complete_epoch(run_dir, lstm_cfg["epochs"])
+    if last is not None:
+        model.load_state_dict(torch.load(Path(run_dir) / f"model_epoch{last}.pt", map_location=device))
+        optimizer.load_state_dict(torch.load(Path(run_dir) / f"optimizer_epoch{last}.pt", map_location=device))
+        restore_rng_state(torch.load(Path(run_dir) / f"rng_epoch{last}.pt", weights_only=False))
+        start_epoch = last + 1
+        print(f"Resuming training at epoch {start_epoch} from {run_dir}")
+
+    for epoch in range(start_epoch, lstm_cfg["epochs"] + 1):
         # set new learning rate
         if epoch in learning_rates.keys():
             for param_group in optimizer.param_groups:
@@ -173,8 +185,32 @@ def train(lstm_cfg: Dict, camels_root: Path, basins: List, run_dir: Path,
         train_epoch(model, optimizer, loss_func, loader, lstm_cfg, epoch, lstm_cfg["use_mse"], device)
 
         model_path = Path(run_dir) / f"model_epoch{epoch}.pt"
-        torch.save(model.state_dict(), str(model_path))
+        torch.save(optimizer.state_dict(), str(Path(run_dir) / f"optimizer_epoch{epoch}.pt"))
+        torch.save(rng_state(), str(Path(run_dir) / f"rng_epoch{epoch}.pt"))
+        torch.save(model.state_dict(), str(model_path))   # written last: marks the epoch as complete
     return run_cfg
+
+
+def rng_state() -> Dict:
+    state = {"python": random.getstate(), "numpy": np.random.get_state(), "torch": torch.get_rng_state()}
+    if torch.cuda.is_available():
+        state["cuda"] = torch.cuda.get_rng_state_all()
+    return state
+
+
+def restore_rng_state(state: Dict) -> None:
+    random.setstate(state["python"])
+    np.random.set_state(state["numpy"])
+    torch.set_rng_state(state["torch"])
+    if "cuda" in state and torch.cuda.is_available():
+        torch.cuda.set_rng_state_all(state["cuda"])
+
+
+def last_complete_epoch(run_dir: Path, max_epoch: int) -> Optional[int]:
+    """Highest epoch <= max_epoch with model, optimizer and RNG states saved, or None."""
+    done = [e for e in range(1, max_epoch + 1)
+            if all((Path(run_dir) / f"{name}_epoch{e}.pt").exists() for name in ("model", "optimizer", "rng"))]
+    return max(done) if done else None
 
 
 def evaluate_basin(model: nn.Module, loader: DataLoader,
