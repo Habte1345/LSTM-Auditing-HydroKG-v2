@@ -88,13 +88,18 @@ def prepare_run(lstm_cfg: Dict, camels_root: Path, basins: List, run_dir: Path,
     if not Path(run_cfg["db_path"]).exists():
         add_camels_attributes(camels_root, db_path=run_cfg["db_path"])
     if not Path(run_cfg["train_file"]).exists():
+        # write under a temporary name and rename when complete, so an interrupted
+        # build never leaves a partial file that looks finished
+        tmp_file = Path(run_cfg["train_file"]).with_suffix(".h5.partial")
+        tmp_file.unlink(missing_ok=True)
         create_h5_files(
             camels_root=Path(camels_root),
-            out_file=Path(run_cfg["train_file"]),
+            out_file=tmp_file,
             basins=basins,
             dates=[train_period[0], train_period[1]],
             with_basin_str=True,
             seq_length=lstm_cfg["seq_length"])
+        tmp_file.replace(run_cfg["train_file"])
     run_cfg["lr_schedule"] = {str(k): v for k, v in lstm_cfg["lr_schedule"].items()}
     with (run_dir / "cfg.json").open("w") as fp:
         json.dump(run_cfg, fp, sort_keys=True, indent=4)
