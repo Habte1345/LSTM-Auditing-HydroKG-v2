@@ -158,7 +158,7 @@ kg:
   store_daily_violations: false   # true writes every daily violation node (large)
   base_iri: "https://w3id.org/hydrokg#"
 
-seeds: [658666, 111, 222, 333, 444, 555, 666, 777]
+seeds: [658666, 111, 444, 666, 777]
 
 # -----------------------------------------------------------------------------
 # Experiment orchestration (hydrokg.pipeline.experiment)
