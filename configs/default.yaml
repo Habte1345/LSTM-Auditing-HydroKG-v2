@@ -120,11 +120,12 @@ burden:
   custom_weights: {R0: 1, R1: 1, R2: 1, R3: 1, R4: 1, R5: 1, R6: 1}
 
 # -----------------------------------------------------------------------------
-# Graph-guided fine-tuning (warm start from the baseline checkpoint).
+# Graph-guided training of the final epochs. Each scenario restores the baseline run
+# after epoch (lstm.epochs - fine_tune.epochs) and trains the remaining epochs with the
+# baseline learning-rate schedule, so every scenario has the same number of epochs.
 # -----------------------------------------------------------------------------
 fine_tune:
   epochs: 3
-  learning_rate: 0.0005
   curriculum:
     enabled: true
     temperature: 1.0
@@ -165,9 +166,10 @@ seeds: [658666, 111, 444, 666, 777]
 # -----------------------------------------------------------------------------
 experiment:
   name: hydrokg_v2
-  arms: [control, curriculum, profile, curriculum_profile]
-  corrections: [none, clip, analog]
+  arms: [hydrokg_s, hydrokg_f, hydrokg]   # also available: baseline_replay (verification)
+  corrections: [none, clip]               # also available: analog
   baseline_checkpoint_epoch: null    # null -> last epoch (lstm.epochs)
   reuse_baseline_run_dir: null       # path of an existing baseline run (cfg.json, attributes.db, model_epoch*.pt, data/train/train_data.h5)
   audit_workers: 1                   # parallel processes for basin audits
+  analog_benchmark: false            # graph vs table analog retrieval (observations only; run once)
   kge_bins: [-1.0, 0.0, 0.2, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]

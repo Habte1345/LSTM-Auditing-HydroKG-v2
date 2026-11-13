@@ -67,6 +67,9 @@ def validate_config(cfg: dict) -> None:
                 "corrections may only be triggered by observation-free rules.")
     if cfg["burden"]["weighting"] not in ("equal_rules", "equal_classes", "custom"):
         raise ValueError(f"Unknown burden.weighting {cfg['burden']['weighting']!r}")
+    if not 0 < cfg["fine_tune"]["epochs"] < cfg["lstm"]["epochs"]:
+        raise ValueError("fine_tune.epochs must be between 1 and lstm.epochs - 1: the scenarios "
+                         "re-train the final fine_tune.epochs epochs of the baseline.")
     profile_rules = cfg["fine_tune"]["profile_feature"]["rules"]
     if profile_rules not in ("auto", "all", "observation_free"):
         raise ValueError(f"Unknown fine_tune.profile_feature.rules {profile_rules!r}")

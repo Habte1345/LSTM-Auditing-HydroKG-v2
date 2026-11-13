@@ -148,11 +148,6 @@ def analyze_seed(out_dir: str | Path, cfg: dict) -> None:
                 "baseline_median_abs_error": sig[err_cols].abs().median(),
                 "model_median_abs_error": sig_m[err_cols].abs().median(),
             })
-    control = frames.get("control_test")
-    if control is not None:
-        for m in models:
-            if m.startswith(("curriculum", "profile")) and "+" not in m:
-                tables.update(comparison(control, frames[m], f"{m}_vs_control"))
     for m in models:
         if "+" in m:
             raw = m.split("+")[0] + "_test"

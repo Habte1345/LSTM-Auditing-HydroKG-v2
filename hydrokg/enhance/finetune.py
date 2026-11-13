@@ -1,15 +1,18 @@
-"""Graph-guided fine-tuning of the baseline LSTM.
+"""Graph-guided training of the final epochs of the baseline LSTM.
 
-Arms (configs/experiments): control (continuation: same optimizer step, uniform
-shuffling, unchanged inputs), curriculum, profile, curriculum+profile. Every arm uses the
-identical optimization step of the vendored `train_epoch` (NSE loss, Adam, gradient-norm
-clipping), the same number of epochs and the same constant learning rate, so differences
-between arms are attributable to the feedback mechanisms alone.
+Every scenario restores the baseline run at the end of epoch E - k (model, Adam state,
+random-number state) and trains epochs E - k + 1 ... E with the baseline's learning-rate
+schedule, so all scenarios receive exactly the E epochs of the baseline:
 
-Online audit: after each optimizer step, the batch's predictions and targets are rescaled
-to mm/day and R0-R3 are evaluated with the basin floors from the training period. The
-detections never enter the loss or the backward pass; they set the next epoch's sampling
-weights and (for the profile arm) refresh the daily-rule columns of the profile.
+    Baseline   : the baseline run itself (model_epoch{E}.pt)
+    HydroKG-S  : basin sampling weighted by violation rates
+    HydroKG-F  : violation rates appended as static inputs
+    HydroKG    : both
+
+Online audit: after each optimizer step, the batch's predictions and targets are rescaled to
+mm/day and R0-R3 are evaluated with the basin floors from the training period. The detections
+never enter the loss or the backward pass; they set the next epoch's sampling weights and
+refresh the daily-rule columns of the violation features.
 """
 
 from __future__ import annotations
@@ -29,7 +32,7 @@ from hydrokg.enhance.feedback import (PROFILE_PREFIX, curriculum_weights, profil
 from hydrokg.lstm.datasets import CamelsH5
 from hydrokg.lstm.datautils import rescale_features
 from hydrokg.lstm.nseloss import NSELoss
-from hydrokg.lstm.train import build_model, input_size, set_seeds
+from hydrokg.lstm.train import build_model, input_size, restore_rng_state, set_seeds
 from hydrokg.rules.engine import AuditResult, online_batch_counts
 from hydrokg.rules.registry import ONLINE_RULES
 
@@ -91,24 +94,54 @@ def counts_to_results(counts: pd.DataFrame) -> list[AuditResult]:
     return results
 
 
-def fine_tune(cfg: dict, baseline_run_cfg: dict, checkpoint_path: str | Path, basins: list[str],
+def lr_at_epoch(lstm_cfg: dict, epoch: int) -> float:
+    """Learning rate of the baseline schedule in force during `epoch`."""
+    lr = lstm_cfg["learning_rate"]
+    for start, value in sorted((int(k), v) for k, v in lstm_cfg["lr_schedule"].items()):
+        if epoch >= start:
+            lr = value
+    return lr
+
+
+def load_optimizer_state(optimizer: torch.optim.Optimizer, model: torch.nn.Module, state: dict) -> None:
+    """Load the baseline optimizer state; for an extended lstm.weight_ih, the Adam moments of
+    the new input rows start at zero (consistent with their zero-initialized weights)."""
+    names = [n for n, _ in model.named_parameters()]
+    params = dict(model.named_parameters())
+    for idx, st in state["state"].items():
+        p = params[names[int(idx)]]
+        for key in ("exp_avg", "exp_avg_sq"):
+            if key in st and st[key].shape != p.shape:
+                grown = torch.zeros_like(p)
+                grown[: st[key].shape[0]] = st[key]
+                st[key] = grown
+    optimizer.load_state_dict(state)
+
+
+def fine_tune(cfg: dict, baseline_run_cfg: dict, run_dir: str | Path, start_epoch: int, basins: list[str],
               floors: dict[str, float], initial_rates: pd.DataFrame, curriculum: bool, profile: bool,
               profile_mode: str, seed: int, out_dir: str | Path, profile_basins: Optional[list[str]] = None,
               on_epoch_end=None) -> dict:
-    """Fine-tune and return paths/metadata.
+    """Train epochs start_epoch+1 ... lstm.epochs of the baseline run with knowledge-graph feedback.
 
-    initial_rates : basin x rule rates of the TRAINING-period audit of the baseline, as read
-        from the knowledge graph (hydrokg.kg.store.feedback_rates); all basins that need a
-        profile row, including held-out basins for which only observation-free rules are filled.
+    The model, Adam state and random-number state are restored from the baseline run at the end
+    of `start_epoch`, and the learning-rate schedule of the baseline is followed, so every scenario
+    receives exactly the same number of epochs as the baseline. Without feedback (curriculum and
+    profile both off) the procedure reproduces the baseline's own epochs exactly.
+
+    initial_rates : basin x rule rates of the TRAINING-period audit of the checkpoint at
+        `start_epoch`, as read from the knowledge graph (hydrokg.kg.store.feedback_rates).
     on_epoch_end : callback(epoch, online_counts) -> rates. The experiment pipeline writes the
-        epoch's online detections to the knowledge graph as a provenance-tracked audit and
-        returns the rates read back from the graph; these rates drive the next epoch. Without
-        a callback (standalone use) the rates are computed from the counts directly.
+        epoch's online detections to the knowledge graph as a provenance-tracked audit and returns
+        the rates read back from the graph; these rates drive the next epoch. Without a callback
+        (standalone use) the rates are computed from the counts directly.
     """
     out_dir = Path(out_dir)
+    run_dir = Path(run_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     lstm_cfg = dict(cfg["lstm"])
     ft = cfg["fine_tune"]
+    end_epoch = lstm_cfg["epochs"]
     device = torch.device(lstm_cfg.get("device", "cpu"))
     set_seeds(seed)
 
@@ -124,15 +157,24 @@ def fine_tune(cfg: dict, baseline_run_cfg: dict, checkpoint_path: str | Path, ba
                   concat_static=lstm_cfg["concat_static"], cache=lstm_cfg["cache_data"],
                   no_static=lstm_cfg["no_static"])
     model = build_model(lstm_cfg, input_size(lstm_cfg, db_path, basins), device)
-    report = warm_start(model, torch.load(checkpoint_path, map_location=device))
+    report = warm_start(model, torch.load(run_dir / f"model_epoch{start_epoch}.pt", map_location=device))
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=ft["learning_rate"])
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr_at_epoch(lstm_cfg, start_epoch))
+    opt_file, rng_file = run_dir / f"optimizer_epoch{start_epoch}.pt", run_dir / f"rng_epoch{start_epoch}.pt"
+    restored = opt_file.exists() and rng_file.exists()
+    if restored:
+        load_optimizer_state(optimizer, model, torch.load(opt_file, map_location=device))
+        restore_rng_state(torch.load(rng_file, weights_only=False))
+    learning_rates = {int(k): v for k, v in lstm_cfg["lr_schedule"].items()}
     loss_func = NSELoss()
     sample_basins = np.asarray(ds.sample_2_basin)
     online_rates = initial_rates.reindex(columns=ONLINE_RULES)
     history = []
 
-    for epoch in range(1, ft["epochs"] + 1):
+    for epoch in range(start_epoch + 1, end_epoch + 1):
+        if epoch in learning_rates:
+            for param_group in optimizer.param_groups:
+                param_group["lr"] = learning_rates[epoch]
         if curriculum:
             w = curriculum_weights(online_rates, basins, ft["curriculum"]["temperature"], ft["curriculum"]["floor"])
             sample_w = torch.tensor(w.reindex(sample_basins).to_numpy(dtype=float, copy=True), dtype=torch.double)
@@ -147,7 +189,7 @@ def fine_tune(cfg: dict, baseline_run_cfg: dict, checkpoint_path: str | Path, ba
 
         model.train()
         epoch_counts = []
-        for x, y, q_stds, idx in tqdm(loader, desc=f"fine-tune epoch {epoch}", leave=False):
+        for x, y, q_stds, idx in tqdm(loader, desc=f"epoch {epoch}", leave=False):
             # --- identical to hydrokg.lstm.train.train_epoch ---
             optimizer.zero_grad()
             x, y, q_stds = x.to(device), y.to(device), q_stds.to(device)
@@ -169,10 +211,11 @@ def fine_tune(cfg: dict, baseline_run_cfg: dict, checkpoint_path: str | Path, ba
         online_rates = (kg_rates.reindex(columns=ONLINE_RULES) if kg_rates is not None
                         else rates_from_counts(counts))
         online_rates.to_csv(out_dir / f"online_rates_epoch{epoch}.csv", index_label="basin_id")
-        history.append({"epoch": epoch, "mean_online_rate": float(online_rates.mean(axis=1).mean()),
+        history.append({"epoch": epoch, "learning_rate": optimizer.param_groups[0]["lr"],
+                        "mean_online_rate": float(online_rates.mean(axis=1).mean()),
                         "feedback_source": "knowledge_graph" if kg_rates is not None else "counts"})
 
-        if profile and epoch < ft["epochs"]:
+        if profile and epoch < end_epoch:
             refreshed = initial_rates.reindex(profile_basins).copy()
             for r in ONLINE_RULES:
                 if r in prof_rules:
@@ -186,6 +229,7 @@ def fine_tune(cfg: dict, baseline_run_cfg: dict, checkpoint_path: str | Path, ba
     if prof is not None:
         prof.to_csv(out_dir / "violation_profile.csv", index_label="basin_id")
     meta = {"checkpoint": str(out_dir / "model_finetuned.pt"), "db_path": db_path, "warm_start": report,
+            "start_epoch": start_epoch, "end_epoch": end_epoch, "optimizer_and_rng_restored": restored,
             "curriculum": curriculum, "profile": profile, "profile_rules": prof_rules if profile else [],
             "history": history, "seed": seed}
     with open(out_dir / "finetune.json", "w") as fp:

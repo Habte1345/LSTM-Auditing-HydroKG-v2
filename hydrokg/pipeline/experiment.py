@@ -38,8 +38,10 @@ from hydrokg.rules.context import build_context, regional_omega
 
 log = logging.getLogger("hydrokg")
 
-ARM_FLAGS = {"control": (False, False), "curriculum": (True, False),
-             "profile": (False, True), "curriculum_profile": (True, True)}
+# scenario -> (weighted sampling, violation features). "baseline_replay" re-trains the final
+# epochs without feedback and must reproduce the baseline; it is a verification run.
+ARM_FLAGS = {"hydrokg_s": (True, False), "hydrokg_f": (False, True), "hydrokg": (True, True),
+             "baseline_replay": (False, False)}
 
 
 def _pickle(path: Path, obj=None):
@@ -216,20 +218,28 @@ class Experiment:
         tr, te = self.train_period, self.test_period
         test_set = "test" if self.holdout else "all"
 
-        # baseline predictions and audits
-        pred_train = self.predict(self.checkpoint, self.run_cfg["db_path"], self.all_basins, "train", "baseline")
-        a_pt = self.prov.activity(HK.PredictionActivity, "predict_baseline_train", [self.e_ckpt, self.e_forcing, self.e_attrs])
-        e_pt = self.prov.entity(HK.PredictionSet, "pred_baseline_train", a_pt, tr)
-        # training-period audit used for feedback: observations of training basins only
-        fb_preds = {b: (df if b in self.train_basins else df.assign(qobs=np.nan)) for b, df in pred_train.items()}
-        audit_train = self.audit(fb_preds, "baseline_train_feedback", feedback=True)
-        a_audit_train, e_audit_train = self._record_audit(
-            "baseline_train_feedback", audit_train, [e_pt, self.e_obs_train, self.e_forcing], tr, "all")
-        a_fb = self.prov.activity(HK.FeedbackActivity, "feedback_from_training_audit", [e_audit_train])
-        e_fb = self.prov.entity(HK.FeedbackSignal, "feedback_signals", a_fb, tr)
-        # feedback is read from the knowledge graph, after its provenance check
-        initial_rates = store.feedback_rates(self.kg, a_audit_train, tr)
-        initial_rates.to_csv(self.out / "kg" / "feedback_rates_from_kg.csv", index_label="basin_id")
+        run_dir = Path(self.run_cfg["db_path"]).parent
+        start_epoch = cfg["lstm"]["epochs"] - cfg["fine_tune"]["epochs"]
+        arms = cfg["experiment"]["arms"]
+
+        # feedback for the scenarios: training-period audit of the checkpoint they start from
+        if arms:
+            ckpt_start = run_dir / f"model_epoch{start_epoch}.pt"
+            label = f"baseline_epoch{start_epoch}"
+            pred_train = self.predict(ckpt_start, self.run_cfg["db_path"], self.all_basins, "train", label)
+            a_pt = self.prov.activity(HK.PredictionActivity, f"predict_{label}_train",
+                                      [self.e_ckpt, self.e_forcing, self.e_attrs])
+            e_pt = self.prov.entity(HK.PredictionSet, f"pred_{label}_train", a_pt, tr)
+            # observations of training basins only
+            fb_preds = {b: (df if b in self.train_basins else df.assign(qobs=np.nan)) for b, df in pred_train.items()}
+            audit_train = self.audit(fb_preds, f"{label}_train_feedback", feedback=True)
+            a_audit_train, e_audit_train = self._record_audit(
+                f"{label}_train_feedback", audit_train, [e_pt, self.e_obs_train, self.e_forcing], tr, "all")
+            a_fb = self.prov.activity(HK.FeedbackActivity, "feedback_from_training_audit", [e_audit_train])
+            e_fb = self.prov.entity(HK.FeedbackSignal, "feedback_signals", a_fb, tr)
+            # feedback is read from the knowledge graph, after its provenance check
+            initial_rates = store.feedback_rates(self.kg, a_audit_train, tr)
+            initial_rates.to_csv(self.out / "kg" / "feedback_rates_from_kg.csv", index_label="basin_id")
 
         pred_test = self.predict(self.checkpoint, self.run_cfg["db_path"], self.test_basins, "test", "baseline")
         a_p = self.prov.activity(HK.PredictionActivity, "predict_baseline_test", [self.e_ckpt, self.e_forcing, self.e_attrs])
@@ -241,7 +251,7 @@ class Experiment:
                 self._corrected(pred_test, "baseline", method, e_p, test_set)
 
         floors = {b: c.q_floor for b, c in self.ctx_feedback.items() if b in self.train_basins}
-        for arm in cfg["experiment"]["arms"]:
+        for arm in arms:
             curriculum, profile = ARM_FLAGS[arm]
             arm_dir = self.out / "arms" / arm
             meta_path = arm_dir / "finetune.json"
@@ -258,9 +268,9 @@ class Experiment:
                 with open(meta_path) as fp:
                     meta = json.load(fp)
             else:
-                meta = fine_tune(cfg, self.run_cfg, self.checkpoint, self.train_basins, floors, initial_rates,
-                                 curriculum, profile, profile_rule_set(cfg), self.seed, arm_dir,
-                                 profile_basins=self.all_basins, on_epoch_end=record_online)
+                meta = fine_tune(cfg, self.run_cfg, run_dir, start_epoch, self.train_basins, floors,
+                                 initial_rates, curriculum, profile, profile_rule_set(cfg), self.seed,
+                                 arm_dir, profile_basins=self.all_basins, on_epoch_end=record_online)
             e_ft = self.prov.entity(HK.ModelCheckpoint, f"checkpoint_{arm}", a_ft)
             preds = self.predict(Path(meta["checkpoint"]), meta["db_path"], self.test_basins, "test", arm)
             a_pa = self.prov.activity(HK.PredictionActivity, f"predict_{arm}_test", [e_ft, e_fb, self.e_forcing, self.e_attrs])
@@ -276,13 +286,13 @@ class Experiment:
         store.save(self.kg, self.out / "kg" / "hydrokg.ttl")
         assert_no_leakage(self.kg, self.holdout)
 
-        if not (self.out / "analysis").exists():
-            from hydrokg.pipeline.analysis import analyze_seed
-            analyze_seed(self.out, cfg)
-        donors = self.train_basins
-        flows = {b: f["qobs"] for b, f in self.train_frames.items() if b in donors}
-        benchmark(self.finder, flows, donors, donors, cfg["analogs"]["k"]).to_csv(
-            self.out / "analysis" / "analog_benchmark.csv", index=False)
+        from hydrokg.pipeline.analysis import analyze_seed
+        analyze_seed(self.out, cfg)          # recomputed every run: covers all scenarios present
+        if cfg["experiment"]["analog_benchmark"]:
+            donors = self.train_basins
+            flows = {b: f["qobs"] for b, f in self.train_frames.items() if b in donors}
+            benchmark(self.finder, flows, donors, donors, cfg["analogs"]["k"]).to_csv(
+                self.out / "analysis" / "analog_benchmark.csv", index=False)
 
     def _corrected(self, preds: dict, label: str, method: str, e_source: URIRef, test_set: str) -> None:
         name = f"{label}+{method}_test"
