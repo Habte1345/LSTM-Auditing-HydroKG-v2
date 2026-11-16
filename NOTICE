@@ -1,0 +1,10 @@
+HydroKG-Audit includes code from the accompanying code of
+
+  Kratzert, F., Klotz, D., Herrnegger, M., Sampson, A. K., Hochreiter, S., & Nearing, G. S. (2019).
+  Toward improved predictions in ungauged basins: Exploiting the power of machine learning.
+  Water Resources Research, 55. https://doi.org/10.1029/2019WR026065
+
+as distributed in https://github.com/Habte1345/HydroAuditToolFrameowrk (hydrokg/lstm/).
+That code is licensed under the Apache License, Version 2.0
+(https://www.apache.org/licenses/LICENSE-2.0). Modifications are listed in
+hydrokg/lstm/VENDORED.md.

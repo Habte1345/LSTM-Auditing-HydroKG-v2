@@ -1,0 +1,13 @@
+# Spatial generalization: 20 % of basins held out (aridity-stratified); the feedback uses
+# observation-free rules only and no discharge of held-out basins is ever read.
+experiment:
+  name: hydrokg_v2
+  audit_workers: 8
+split:
+  mode: basin_holdout
+  holdout_fraction: 0.2
+lstm:
+  epochs: 30
+fine_tune:
+  profile_feature:
+    rules: observation_free
